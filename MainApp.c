@@ -14,6 +14,7 @@ pthread_mutex_t lock       ;
 pthread_mutex_t read_lock  ;
 pthread_mutex_t write_lock ;
 
+// conditional variable for blocking and unblocking of threads
 pthread_cond_t condition_var = PTHREAD_COND_INITIALIZER;
 
 // global message queue pointer
@@ -32,6 +33,13 @@ void init()
 	mq->used_bytes    = 0;
 	mq->flag 	  = READY;
 }
+
+/**	Writer_thread will write data in the queue
+	when it will start wrting to the queue it holds mutex write lock
+	so the other thread cannot enter the critical area, 
+	after writing it unlock the reader thread so that it can now read the
+	msg from the queue
+*/
 void * writer_thread(void *p)
 {
 	char msg[][10]={"hello","world","how","are","you"};
@@ -49,6 +57,11 @@ void * writer_thread(void *p)
 	return NULL;
 }
 
+/**	reader_thread will read data from the queue
+	when it will start reading from the queue it holds the mutex read_lock,
+	after reading it unlock the writer_thread lock so that they can start 
+	writing to the queue
+*/
 void * reader_thread(void *p)
 {
 	char msg[10];
@@ -73,6 +86,15 @@ void * reader_thread(void *p)
 	if the queue is full they will suspend writing and
 	if the queue is available they will resume writing
 	
+	when queue is full they will wait for the signal from the
+	reader thread when the queue becomes available, to write 
+	data in the queue
+	when queue is available they will resume writing into the queue
+	
+	the funtion use pthread_cond_timedwait to avoid dead lock condition
+	if no reader is available and queue is full 
+	the writer thread will wait for some time for the queue become avialable
+	if it found time out, it will return (to make thread unblockable) 	
 */
 void * writer_conditional_thread(void *p)
 {
@@ -91,10 +113,12 @@ void * writer_conditional_thread(void *p)
 		if (ret == FAIL)
 			puts("send_msg call fail:");
 	
-		// wait for the available signal from the reader thread
 		if(mq[0].flag == FULL){
-			pthread_cond_timedwait(&condition_var, &lock, &time_to_wait);
-			puts("----TIME OUT----");
+
+			// wait for the 'AVAILABLE' signal from the reader thread
+			ret = pthread_cond_timedwait(&condition_var, &lock, &time_to_wait);
+			if(ret != 0)
+				puts("----TIME OUT----");
 		}
 
 		pthread_mutex_unlock(&lock);// unlock the mutex
@@ -103,14 +127,14 @@ void * writer_conditional_thread(void *p)
 }
 
 /**	reader thread will start reading from the queue if queue
-	become empty the will signal to the writer that queue is
+	become empty they will signal to the writer that queue is
 	now availabe they can resume their writing
 */
 void * reader_conditioal_thread(void *p)
 {
 	char msg[10];
 	int priority, ret, i;
-	// make sleep the reader so that writer can write the data in queue
+	// make sleep the reader so that writer can fill the data in queue
 	sleep(2);
 	for(i = 0; i < 5; i++)
 	{
@@ -125,6 +149,7 @@ void * reader_conditioal_thread(void *p)
 
 		if(mq[0].flag == AVAILABLE)
 			pthread_cond_signal(&condition_var);
+			//signal the writer thread that queue is available they can resume their writing
 	
 		pthread_mutex_unlock(&write_lock);// unlock the mutex
 	}
@@ -138,7 +163,9 @@ int thread_test1()
 
 	pthread_mutex_init(&read_lock, NULL);
 	pthread_mutex_init(&write_lock, NULL);
+
 	puts("-------------- 2 threads testing ----------------------");
+	puts("-----concurently writing and reading of 2 threads-----");
 
 	pthread_create(&tid1,NULL,writer_thread,(void*)"writer_thread1");
 	pthread_create(&tid2,NULL,reader_thread,(void*)"reader_thread2");
@@ -148,7 +175,7 @@ int thread_test1()
 	pthread_mutex_destroy(&read_lock);
 	pthread_mutex_destroy(&write_lock);
 
-	puts("-------------- 2 thread testing  finish --------------\n");
+	puts("-------------- 2 thread testing  :finish: --------------\n");
 	return 0;
 }
 /**	this test chase will test concurrently reading or writing of the two 4 threads
@@ -163,7 +190,8 @@ int thread_test2()
 	pthread_mutex_init(&read_lock, NULL);
 	pthread_mutex_init(&write_lock, NULL);
 
-	puts("-------------- 4 threads testing ----------------------");
+	puts("\n---------------- thread_test2 ----------------------");
+	puts("-----concurently writing and reading of 4 threads-----");
 
 	pthread_create(&tid1,NULL,writer_thread,(void*)"writer_thread1");
 	pthread_create(&tid2,NULL,writer_thread,(void*)"writer_thread2");
@@ -178,11 +206,14 @@ int thread_test2()
 
 	pthread_mutex_destroy(&read_lock);
 	pthread_mutex_destroy(&write_lock);
-	puts("-------------- 4 thread testing finish --------------\n");
+
+	puts("-------------- thread_test2 :finish: --------------\n");
 	return 0;
 }
 
-/**	this test funtion will test signal based locking or unlocking of threads
+/**	this test funtion will test writer thread funtionality when queue is full or available
+	when queue is full writer thread will suspend their writing
+	when queue is available writer thread will resume their writing
 */
 int thread_test3()
 {
@@ -192,7 +223,9 @@ int thread_test3()
 	pthread_mutex_init(&lock, NULL);
 	pthread_mutex_init(&lock, NULL);
 
-	puts("-------------- 4 threads testing ----------------------");
+	puts("\n------------------ thread_test3 -----------------------");
+	puts("-----concurently writing and reading of 4 threads--------");
+	puts("-------------suspend and resume functionality------------");
 
 	pthread_create(&tid1,NULL,writer_conditional_thread,(void*)"writer_thread1");
 	pthread_create(&tid2,NULL,writer_conditional_thread,(void*)"writer_thread2");
@@ -207,7 +240,8 @@ int thread_test3()
 
 	pthread_mutex_destroy(&lock);
 	pthread_mutex_destroy(&lock);
-	puts("-------------- 4 thread testing finish --------------\n");
+
+	puts("----------------- thread_test3 :finish: --------------\n");
 	return 0;
 }
 int main()
